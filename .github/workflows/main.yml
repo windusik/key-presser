@@ -1,0 +1,135 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag (e.g. v1.0.0)'
+        required: true
+        default: 'v1.1'
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller
+          pip install -r requirements.txt
+      - name: Build with PyInstaller
+        run: |
+          pyinstaller --onefile --windowed --name KeyPresser main.py
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: KeyPresser-windows
+          path: dist/KeyPresser.exe
+
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-tk
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller
+          pip install -r requirements.txt
+      - name: Build with PyInstaller
+        run: |
+          pyinstaller --onefile --windowed --name KeyPresser main.py
+      - name: Create .deb package
+        run: |
+          mkdir -p package/usr/local/bin
+          cp dist/KeyPresser package/usr/local/bin/
+          mkdir -p package/DEBIAN
+          echo "Package: key-presser" > package/DEBIAN/control
+          echo "Version: 1.1" >> package/DEBIAN/control
+          echo "Section: utils" >> package/DEBIAN/control
+          echo "Priority: optional" >> package/DEBIAN/control
+          echo "Architecture: amd64" >> package/DEBIAN/control
+          echo "Maintainer: windusik" >> package/DEBIAN/control
+          echo "Description: KeyPresser - a tool for automating key presses" >> package/DEBIAN/control
+          dpkg-deb --build package KeyPresser-1.1.deb
+      - name: Upload Linux artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: KeyPresser-linux
+          path: |
+            dist/KeyPresser
+            KeyPresser-1.1.deb
+
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller
+          pip install -r requirements.txt
+      - name: Build with PyInstaller
+        run: |
+          pyinstaller --onefile --windowed --name KeyPresser main.py
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: KeyPresser-macos
+          path: dist/KeyPresser
+
+  create-release:
+    needs: [build-windows, build-linux, build-macos]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Create Release
+        id: create_release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: KeyPresser ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+          files: |
+            artifacts/KeyPresser-windows/KeyPresser.exe
+            artifacts/KeyPresser-linux/KeyPresser
+            artifacts/KeyPresser-linux/KeyPresser-1.1.deb
+            artifacts/KeyPresser-macos/KeyPresser
+          body: |
+            **KeyPresser ${{ github.ref_name }}**
+
+            ### Downloads:
+            - Windows: KeyPresser.exe
+            - Linux: KeyPresser (executable) and KeyPresser-1.1.deb
+            - macOS: KeyPresser (executable)
+
+            ### Changelog:
+            - Added macros support (KPMS)
+            - Added localization (English, Russian)
+            - Added customizable themes
+            - Added tabs: Modes, Macros, Bindings, Theme
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
