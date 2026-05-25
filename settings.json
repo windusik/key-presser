@@ -1,0 +1,10 @@
+{
+    "target_key": "a",
+    "mode": "hold",
+    "interval_ms": 1000,
+    "hotkey": [],
+    "dark_mode": false,
+    "custom_bg": "#000000",
+    "custom_fg": "#fdfdfd",
+    "language": "ru"
+}
