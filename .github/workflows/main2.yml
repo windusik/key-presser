@@ -1,0 +1,167 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version (e.g. 1.1.0)'
+        required: true
+        default: '1.1.0'
+
+permissions:
+  contents: write   # нужно для создания тега и релиза
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller
+          pip install -r requirements.txt
+      - name: Build with PyInstaller
+        run: |
+          pyinstaller --onefile --windowed --name KeyPresser main.py
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: KeyPresser-windows
+          path: dist/KeyPresser.exe
+
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-tk
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller
+          pip install -r requirements.txt
+      - name: Build with PyInstaller
+        run: |
+          pyinstaller --onefile --windowed --name KeyPresser main.py
+      - name: Create .deb package
+        run: |
+          mkdir -p package/usr/local/bin
+          cp dist/KeyPresser package/usr/local/bin/
+          mkdir -p package/DEBIAN
+          echo "Package: key-presser" > package/DEBIAN/control
+          echo "Version: ${{ github.event.inputs.version || '1.1.0' }}" >> package/DEBIAN/control
+          echo "Section: utils" >> package/DEBIAN/control
+          echo "Priority: optional" >> package/DEBIAN/control
+          echo "Architecture: amd64" >> package/DEBIAN/control
+          echo "Maintainer: windusik" >> package/DEBIAN/control
+          echo "Description: KeyPresser - a tool for automating key presses" >> package/DEBIAN/control
+          dpkg-deb --build package KeyPresser-${{ github.event.inputs.version || '1.1.0' }}.deb
+      - name: Upload Linux artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: KeyPresser-linux
+          path: |
+            dist/KeyPresser
+            KeyPresser-*.deb
+
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller
+          pip install -r requirements.txt
+      - name: Build with PyInstaller
+        run: |
+          pyinstaller --onefile --windowed --name KeyPresser main.py
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: KeyPresser-macos
+          path: dist/KeyPresser
+
+  create-release:
+    needs: [build-windows, build-linux, build-macos]
+    runs-on: ubuntu-latest
+    if: always() && (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch')
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine tag name
+        id: tag
+        run: |
+          if [[ "${{ github.event_name }}" == "push" && "${{ github.ref }}" == refs/tags/* ]]; then
+            TAG_NAME="${GITHUB_REF#refs/tags/}"
+          else
+            TAG_NAME="v${{ github.event.inputs.version }}"
+          fi
+          echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
+
+      - name: Create and push tag (if not exists)
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if ! git rev-parse "${{ steps.tag.outputs.tag_name }}" >/dev/null 2>&1; then
+            git tag "${{ steps.tag.outputs.tag_name }}"
+            git push origin "${{ steps.tag.outputs.tag_name }}"
+          else
+            echo "Tag already exists"
+          fi
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag_name }}
+          name: KeyPresser ${{ steps.tag.outputs.tag_name }}
+          draft: false
+          prerelease: false
+          files: |
+            artifacts/KeyPresser-windows/KeyPresser.exe
+            artifacts/KeyPresser-linux/KeyPresser
+            artifacts/KeyPresser-linux/KeyPresser-*.deb
+            artifacts/KeyPresser-macos/KeyPresser
+          body: |
+            **KeyPresser ${{ steps.tag.outputs.tag_name }}**
+
+            ### Downloads:
+            - Windows: KeyPresser.exe
+            - Linux: KeyPresser (executable) and .deb package
+            - macOS: KeyPresser (executable)
+
+            ### Changelog:
+            - Added macros support (KPMS)
+            - Added localization (English, Russian)
+            - Added customizable themes
+            - Added tabs: Modes, Macros, Bindings, Theme
+            - Key selection by pressing a button
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
